@@ -1,4 +1,4 @@
 pandas
 requests
 sqlalchemy
-psycopg2
+apache-airflow
