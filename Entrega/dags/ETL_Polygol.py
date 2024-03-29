@@ -75,7 +75,7 @@ class GestorDeDatos:
         print("La solicitud finalizo con exito")
         return all_results
         
-    def dataframeCrypto(self,dataList:list)-> pd.DataFrame:
+    def dataframeCrypto(self,dataList:list)-> dict:
         """
         Convierte una lista de datos de la API de Polygon en un DataFrame de pandas.
 
@@ -83,9 +83,9 @@ class GestorDeDatos:
             dataList (list): Lista de diccionarios que contienen datos de la API de Polygon.
 
         Returns:
-            pd.DataFrame: DataFrame consolidado con los datos procesados.
+            JSON: Json consolidado con los datos procesados.
 
-        El DataFrame resultante incluye columnas renombradas y dos columnas adicionales 'Exchange_Symbol' que
+        El Json resultante incluye columnas renombradas y dos columnas adicionales 'Exchange_Symbol' que
         representa el símbolo de intercambio asociado a cada conjunto de datos y 'aud_ins_dttm' que representa la fecha de la ejecucion.
         """
         all_dataframes = []
@@ -103,18 +103,18 @@ class GestorDeDatos:
             "c":'Close_Price',
             "h":'Highest_Price',
             "l":'Lowest_Price',
-            "t":'Event_DateTime',
+            "t":'Event_Date',
             "n":'Number_of_transactions'
             }
         result_dataframe = result_dataframe.rename(columns=renameColumns)
-        result_dataframe['Event_DateTime'] = pd.to_datetime(result_dataframe['Event_DateTime'], unit='ms')
+        result_dataframe['Event_Date'] = pd.to_datetime(result_dataframe['Event_Date'], unit='ms').dt.date
         result_dataframe['aud_ins_dttm']   = datetime.now()
         # Reorganizar las columnas
-        init_columns = ['aud_ins_dttm','Exchange_Symbol', 'Event_DateTime']
+        init_columns = ['aud_ins_dttm','Exchange_Symbol', 'Event_Date']
         result_dataframe = result_dataframe[init_columns + [col for col in result_dataframe.columns if col not in init_columns]]
-        return result_dataframe
+        return result_dataframe.to_json(date_format='iso')
     
-    def insertIntoSql(self,df_exchanges,nameTable):
+    def insertIntoSql(self,dic_exchanges,nameTable):
         """
             Esta función realiza un 'upsert' (actualización o inserción) en una tabla de base de datos.
             Los datos para el 'upsert' provienen de un DataFrame de pandas. La función utiliza SQLAlchemy para
@@ -137,12 +137,12 @@ class GestorDeDatos:
 
             La conexión con la base de datos se establece utilizando las credenciales almacenadas en `self.__datos['SQLCREDENTIAL']`.
         """
-        from sqlalchemy import create_engine,text
+        from sqlalchemy import create_engine,text,types
         credential = self.__datos['SQLCREDENTIAL']
         engine = create_engine(f'postgresql://{credential["sqlUser"]}:{credential["sqlkey"]}@data-engineer-cluster.cyhh5bfevlmn.us-east-1.redshift.amazonaws.com:5439/data-engineer-database')
         temp_table_name = f"{nameTable}"
-        df_exchanges.to_sql(temp_table_name, engine, index=False, if_exists='replace', method='multi')
-
+        df_exchanges = pd.read_json(dic_exchanges, convert_dates=['Event_Date', 'aud_ins_dttm'])
+        df_exchanges.to_sql(temp_table_name, engine, index=False, if_exists='replace', method='multi', dtype={'aud_ins_dttm': types.DateTime(),'Event_Date': types.Date()})
         update_query = text("""
             UPDATE martin_pm_coderhouse.exchange_stocks_data as target
             SET
@@ -155,7 +155,7 @@ class GestorDeDatos:
                 number_of_transactions = staging.number_of_transactions
             FROM martin_pm_coderhouse.temp_exchange_stocks_data as staging
             WHERE target.exchange_symbol = staging.exchange_symbol
-            AND target.event_datetime = staging.event_datetime;
+            AND target.event_date = staging.event_date;
         """)
         with engine.connect() as conn:
             conn.execute(update_query)
@@ -166,19 +166,33 @@ class GestorDeDatos:
             FROM martin_pm_coderhouse.temp_exchange_stocks_data as staging
             LEFT JOIN martin_pm_coderhouse.exchange_stocks_data as target
             ON staging.exchange_symbol = target.exchange_symbol
-            AND staging.event_datetime = target.event_datetime
+            AND staging.event_date = target.event_date
             WHERE target.exchange_symbol IS NULL;
         """)
         with engine.connect() as conn:
             conn.execute(insert_query)
 
 
-def etl_process():
-    gestor = GestorDeDatos()
-    response_Api = gestor.cryptoapi(stocksTicker=["AAPL", "GOOGL", "SP"])
+
+gestor = GestorDeDatos()
+def extract_data(tickers, p_from_str, p_to_str):
+    # Convertir las cadenas de fecha a objetos datetime
+    p_from = datetime.strptime(p_from_str, '%Y-%m-%d')
+    p_to = datetime.strptime(p_to_str, '%Y-%m-%d')
+    response_Api = gestor.cryptoapi(stocksTicker=tickers, p_from=p_from, p_to=p_to)
+    print(response_Api)
+    return response_Api
+
+def transform_data(**context):
+    response_Api = context['task_instance'].xcom_pull(task_ids='extract_data_task')
     print(response_Api)
     df_exchanges = gestor.dataframeCrypto(response_Api)
+    return df_exchanges
+
+def load_data(**context):
+    df_exchanges = context['task_instance'].xcom_pull(task_ids='transform_data_task')
     gestor.insertIntoSql(df_exchanges, 'temp_exchange_stocks_data')
+
 
 default_args = {
     'owner': 'airflow',
@@ -190,14 +204,34 @@ default_args = {
 dag = DAG(
     'etl_polygon_data',
     default_args=default_args,
-    description='A simple DAG to ETL data from Polygon API',
+    description='DAG para el ETL de polygon, api con la informacion de instrumentos financieros',
     schedule_interval='@daily',
 )
 
-run_etl = PythonOperator(
-    task_id='etl_polygon_api_data',
-    python_callable=etl_process,
+
+extract_data_task = PythonOperator(
+    task_id='extract_data_task',
+    python_callable=extract_data,
+    op_kwargs={
+        'tickers': ["AAPL", "GOOGL", "SP"],
+        'p_from_str': '{{ macros.ds_add(ds, -8) }}',  # Fecha de ejecución + 1 día
+        'p_to_str': '{{ ds }}',  # Fecha de ejecución
+    },
     dag=dag,
 )
 
-run_etl
+transform_data_task = PythonOperator(
+    task_id='transform_data_task',
+    python_callable=transform_data,
+    provide_context=True,
+    dag=dag,
+)
+
+load_data_task = PythonOperator(
+    task_id='load_data_task',
+    python_callable=load_data,
+    provide_context=True,
+    dag=dag,
+)
+
+extract_data_task >> transform_data_task >> load_data_task
