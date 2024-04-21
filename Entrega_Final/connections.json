@@ -1,0 +1,12 @@
+{
+  "redshift_connection": {
+    "conn_type": "redshift",
+    "description": "",
+    "login": "martin_pm_coderhouse",
+    "password": "O956VwKRBB",
+    "host": "data-engineer-cluster.cyhh5bfevlmn.us-east-1.redshift.amazonaws.com",
+    "port": 5439,
+    "schema": "data-engineer-database",
+    "extra": ""
+  }
+}
