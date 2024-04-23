@@ -1,1 +1,13 @@
-{"SECRETS_API_KEY":"oKwhUaDDVIpmtFci1QjU6xqrc1aStEH8"}
+{"SECRETS_API_KEY":"oKwhUaDDVIpmtFci1QjU6xqrc1aStEH8",
+ "SECRETS_EMAIL_KEY" : "zs64GxqdI8QriVpu",
+ "CONFIG_POLYGOL" : 
+                        {
+                            "stocks": ["AAPL", "GOOGL", "SP"],
+                            "thresholds": {
+                                "AAPL"  : {"min": 240, "max": 290},
+                                "GOOGL" : {"min": 240, "max": 290},
+                                "SP"    : {"min": 240, "max": 290}
+                            }
+                        }
+
+}

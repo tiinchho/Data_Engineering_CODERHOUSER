@@ -65,7 +65,8 @@ x-airflow-common:
     - ./keys:/opt/airflow/keys
     - ./connections.json:/opt/airflow/connections.json
     - ./variables.json:/opt/airflow/variables.json  
-  #env_file: .env
+  env_file: 
+    - ./credentials.env
   user: "${AIRFLOW_UID:-50000}:${AIRFLOW_GID:-50000}"
   depends_on:
     postgres:

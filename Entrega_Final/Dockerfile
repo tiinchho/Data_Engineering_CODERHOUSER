@@ -1,4 +1,3 @@
-FROM python:3.10
 FROM apache/airflow:2.3.3
 
 WORKDIR /app
@@ -16,4 +15,3 @@ USER airflow
 
 RUN pip install --upgrade pip
 RUN pip install -r /app/requirements.txt
-# CMD [ "python", "-u","ETL_Polygol.py" ]

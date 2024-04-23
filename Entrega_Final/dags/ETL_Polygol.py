@@ -9,14 +9,28 @@ import pandas as pd
 from typing import List
 from airflow.providers.postgres.hooks.postgres import PostgresHook
 from airflow.models import Variable
-
+import smtplib
 
 class GestorDeDatos:
     def __init__(self):
         self.__datos = Variable.get("SECRETS_API_KEY")
+        self.__config_validate = json.loads(Variable.get("CONFIG_POLYGOL"))
         print(f'el valor de la variable es: {self.__datos}')
 
-    def cryptoapi(self,stocksTicker:List[str],timespan: str = 'day',p_from: datetime = datetime.now() - timedelta(days=8), p_to: datetime = datetime.now() - timedelta(days=1)) -> list:
+    def __enviar_Alerta(self,gp_subject:str,gp_body:str):
+        try:
+            email_from = os.environ.get('EMAIL_FROM')
+            pass_email_from = Variable.get("SECRETS_EMAIL_KEY")
+            email_to = os.environ.get('EMAIL_TO')
+            x=smtplib.SMTP('smtp.mailersend.net',587)
+            x.starttls()
+            x.login(email_from,pass_email_from)
+            message='Subject: {}\n\n{}'.format(gp_subject,gp_body)
+            x.sendmail(email_from,email_to,message)
+            print('Exito')
+        except Exception as exception:
+            print(f'Failure: {exception}')
+    def cryptoapi(self,timespan: str = 'day',p_from: datetime = datetime.now() - timedelta(days=8), p_to: datetime = datetime.now() - timedelta(days=1)) -> list:
         """
         Obtener datos de la API de Polygon para un rango de fechas específico y para una lista variable de tickers.
 
@@ -39,7 +53,7 @@ class GestorDeDatos:
         import time
         all_results = []  # Lista para almacenar resultados de todas las ejecuciones
         print(f'el valor de la variable es: {self.__datos}')
-        for ticker in stocksTicker:
+        for ticker in self.__config_validate['stocks']:
             url = f'https://api.polygon.io/v2/aggs/ticker/{ticker}/range/1/{timespan}/{p_from.strftime("%Y-%m-%d")}/{p_to.strftime("%Y-%m-%d")}'
             paramsApi = {"apiKey" : f"{self.__datos}"}
             print(paramsApi)
@@ -157,15 +171,18 @@ class GestorDeDatos:
         """)
         with engine.connect() as conn:
             conn.execute(insert_query)
+        self.__enviar_Alerta("Estado del Proceso ETL: Exito","El job termino con exito")
 
+    def valida_datos_api(self,dataList:list):
+        print(self.__config_validate["min_polygol_id"])
 
 
 gestor = GestorDeDatos()
-def extract_data(tickers, p_from_str, p_to_str):
+def extract_data(p_from_str, p_to_str):
     # Convertir las cadenas de fecha a objetos datetime
     p_from = datetime.strptime(p_from_str, '%Y-%m-%d')
     p_to = datetime.strptime(p_to_str, '%Y-%m-%d')
-    response_Api = gestor.cryptoapi(stocksTicker=tickers, p_from=p_from, p_to=p_to)
+    response_Api = gestor.cryptoapi(p_from=p_from, p_to=p_to)
     print(response_Api)
     return response_Api
 
@@ -179,6 +196,11 @@ def load_data(**context):
     df_exchanges = context['task_instance'].xcom_pull(task_ids='transform_data_task')
     gestor.insertIntoSql(df_exchanges, 'temp_exchange_stocks_data')
 
+# Función para validar los datos
+def validate_data_api(**context):
+    data = context['task_instance'].xcom_pull(task_ids='extract_data_task', key='raw_data')
+    gestor.valida_datos_api(data)
+    return True
 
 default_args = {
     'owner': 'airflow',
@@ -191,7 +213,7 @@ dag = DAG(
     'etl_polygon_data',
     default_args=default_args,
     description='DAG para el ETL de polygon, api con la informacion de instrumentos financieros',
-    schedule_interval='@daily',
+    schedule_interval='0 0 * * *',
     catchup=False,
 )
 
@@ -200,7 +222,7 @@ extract_data_task = PythonOperator(
     task_id='extract_data_task',
     python_callable=extract_data,
     op_kwargs={
-        'tickers': ["AAPL", "GOOGL", "SP"],
+        # 'tickers': ["AAPL", "GOOGL", "SP"],
         'p_from_str': '{{ macros.ds_add(ds, -8) }}',  # Fecha de ejecución + 1 día
         'p_to_str': '{{ ds }}',  # Fecha de ejecución
     },
@@ -221,4 +243,11 @@ load_data_task = PythonOperator(
     dag=dag,
 )
 
-extract_data_task >> transform_data_task >> load_data_task
+validate_data_task = PythonOperator(
+    task_id='validate_data_task',
+    python_callable=validate_data_api,
+    provide_context=True,
+    dag=dag,
+)
+
+extract_data_task >> validate_data_task >> transform_data_task >> load_data_task
