@@ -10,6 +10,8 @@ from typing import List
 from airflow.providers.postgres.hooks.postgres import PostgresHook
 from airflow.models import Variable
 import smtplib
+from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
 
 class GestorDeDatos:
     def __init__(self):
@@ -17,19 +19,32 @@ class GestorDeDatos:
         self.__config_validate = json.loads(Variable.get("CONFIG_POLYGOL"))
         print(f'el valor de la variable es: {self.__datos}')
 
-    def __enviar_Alerta(self,gp_subject:str,gp_body:str):
+    def __enviar_Alerta(self, gp_subject: str, gp_body: str):
         try:
             email_from = os.environ.get('EMAIL_FROM')
             pass_email_from = Variable.get("SECRETS_EMAIL_KEY")
             email_to = os.environ.get('EMAIL_TO')
-            x=smtplib.SMTP('smtp.mailersend.net',587)
-            x.starttls()
-            x.login(email_from,pass_email_from)
-            message='Subject: {}\n\n{}'.format(gp_subject,gp_body)
-            x.sendmail(email_from,email_to,message)
+            
+            # Crear una instancia de MIMEMultipart
+            message = MIMEMultipart()
+            message['From'] = email_from
+            message['To'] = email_to
+            message['Subject'] = gp_subject
+            
+            # Agregar el cuerpo del mensaje como HTML
+            message.attach(MIMEText(gp_body, 'html'))
+            
+            # Conectar al servidor SMTP y enviar el correo
+            with smtplib.SMTP('smtp.mailersend.net', 587) as x:
+                x.starttls()
+                x.login(email_from, pass_email_from)
+                x.send_message(message)  # Usar send_message para enviar el objeto MIMEMultipart
+            
             print('Exito')
         except Exception as exception:
             print(f'Failure: {exception}')
+
+
     def cryptoapi(self,timespan: str = 'day',p_from: datetime = datetime.now() - timedelta(days=8), p_to: datetime = datetime.now() - timedelta(days=1)) -> list:
         """
         Obtener datos de la API de Polygon para un rango de fechas específico y para una lista variable de tickers.
@@ -173,8 +188,32 @@ class GestorDeDatos:
             conn.execute(insert_query)
         self.__enviar_Alerta("Estado del Proceso ETL: Exito","El job termino con exito")
 
-    def valida_datos_api(self,dataList:list):
-        print(self.__config_validate["min_polygol_id"])
+    def alerts_stocks_value(self, dic_exchanges):
+        df_validate = pd.read_json(dic_exchanges)
+        filtered_df = pd.DataFrame()  # Crear un nuevo DataFrame vacío para almacenar los resultados
+        print(df_validate[['Exchange_Symbol','Close_Price']])
+        for symbol, values in self.__config_validate["thresholds"].items():
+            # Filtrar las filas donde el símbolo coincide y el precio está dentro del rango
+            print(symbol,values)
+            temp_df = df_validate[(df_validate['Exchange_Symbol'] == symbol) & ((df_validate['Close_Price'] <= values['min']) )]
+            if not temp_df.empty:
+                # Aquí determinamos si el precio está por encima o por debajo del rango y creamos la nueva columna 'Status'
+                temp_df['Status'] = temp_df.apply(lambda row: 'Por encima del límite' if row['Close_Price'] >= values['max'] else 'Por debajo del límite', axis=1)
+                # Añadir los resultados al DataFrame filtrado
+                filtered_df = pd.concat([filtered_df, temp_df[["Event_Date", 'Exchange_Symbol', 'Close_Price', 'Status']]])
+
+        # Resetear el índice del DataFrame filtrado
+        if not filtered_df.empty:
+            filtered_df.reset_index(drop=True, inplace=True)
+            
+            # Crear el texto HTML para el cuerpo del correo
+            intro_text = "<p>La siguiente tabla contiene los instrumentos con picos en sus precios:</p>"
+            html_table = filtered_df.to_html(index=False)
+            html_body = intro_text + html_table  # Concatenar el texto introductorio con la tabla HTML
+            
+            self.__enviar_Alerta("ALERTA PICOS DE VALORES", html_body)
+
+
 
 
 gestor = GestorDeDatos()
@@ -197,9 +236,9 @@ def load_data(**context):
     gestor.insertIntoSql(df_exchanges, 'temp_exchange_stocks_data')
 
 # Función para validar los datos
-def validate_data_api(**context):
-    data = context['task_instance'].xcom_pull(task_ids='extract_data_task', key='raw_data')
-    gestor.valida_datos_api(data)
+def alterts_values(**context):
+    data = context['task_instance'].xcom_pull(task_ids='transform_data_task')
+    gestor.alerts_stocks_value(data)
     return True
 
 default_args = {
@@ -243,11 +282,13 @@ load_data_task = PythonOperator(
     dag=dag,
 )
 
-validate_data_task = PythonOperator(
-    task_id='validate_data_task',
-    python_callable=validate_data_api,
+alert_value_task = PythonOperator(
+    task_id='alert_value_task',
+    python_callable=alterts_values,
     provide_context=True,
     dag=dag,
 )
 
-extract_data_task >> validate_data_task >> transform_data_task >> load_data_task
+extract_data_task >> transform_data_task 
+transform_data_task >> alert_value_task
+transform_data_task >> load_data_task

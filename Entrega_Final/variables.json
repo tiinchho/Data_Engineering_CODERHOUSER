@@ -1,13 +1,25 @@
-{"SECRETS_API_KEY":"oKwhUaDDVIpmtFci1QjU6xqrc1aStEH8",
- "SECRETS_EMAIL_KEY" : "zs64GxqdI8QriVpu",
- "CONFIG_POLYGOL" : 
-                        {
-                            "stocks": ["AAPL", "GOOGL", "SP"],
-                            "thresholds": {
-                                "AAPL"  : {"min": 240, "max": 290},
-                                "GOOGL" : {"min": 240, "max": 290},
-                                "SP"    : {"min": 240, "max": 290}
-                            }
-                        }
-
+{
+    "SECRETS_API_KEY": "oKwhUaDDVIpmtFci1QjU6xqrc1aStEH8",
+    "SECRETS_EMAIL_KEY": "zs64GxqdI8QriVpu",
+    "CONFIG_POLYGOL": {
+        "stocks": [
+            "AAPL",
+            "GOOGL",
+            "SP"
+        ],
+        "thresholds": {
+            "AAPL": {
+                "min": 150,
+                "max": 230
+            },
+            "GOOGL": {
+                "min": 150,
+                "max": 230
+            },
+            "SP": {
+                "min": 150,
+                "max": 230
+            }
+        }
+    }
 }
