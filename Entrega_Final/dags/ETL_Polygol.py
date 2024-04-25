@@ -129,7 +129,7 @@ class GestorDeDatos:
         result_dataframe = result_dataframe[init_columns + [col for col in result_dataframe.columns if col not in init_columns]]
         return result_dataframe.to_json(date_format='iso')
     
-    def insertIntoSql(self,dic_exchanges,nameTable):
+    def insertIntoSql(self, dic_exchanges, nameTable):
         """
             Esta función realiza un 'upsert' (actualización o inserción) en una tabla de base de datos.
             Los datos para el 'upsert' provienen de un DataFrame de pandas. La función utiliza SQLAlchemy para
@@ -152,41 +152,52 @@ class GestorDeDatos:
 
             La conexión con la base de datos se establece utilizando las credenciales almacenadas en `self.__datos['SQLCREDENTIAL']`.
         """
-        from sqlalchemy import text,types
-        pg_hook = PostgresHook(postgres_conn_id='redshift_connection')
-        engine = pg_hook.get_sqlalchemy_engine()
-        temp_table_name = f"{nameTable}"
-        df_exchanges = pd.read_json(dic_exchanges, convert_dates=['Event_Date', 'aud_ins_dttm'])
-        df_exchanges.to_sql(temp_table_name, engine, index=False, if_exists='replace', method='multi', dtype={'aud_ins_dttm': types.DateTime(),'Event_Date': types.Date()})
-        update_query = text("""
-            UPDATE martin_pm_coderhouse.exchange_stocks_data as target
-            SET
-                trading_volume = staging.trading_volume,
-                volume_weighted_average_price = staging.volume_weighted_average_price,
-                open_price = staging.open_price,
-                close_price = staging.close_price,
-                highest_price = staging.highest_price,
-                lowest_price = staging.lowest_price,
-                number_of_transactions = staging.number_of_transactions
-            FROM martin_pm_coderhouse.temp_exchange_stocks_data as staging
-            WHERE target.exchange_symbol = staging.exchange_symbol
-            AND target.event_date = staging.event_date;
-        """)
-        with engine.connect() as conn:
-            conn.execute(update_query)
-
-        insert_query = text("""
-            INSERT INTO martin_pm_coderhouse.exchange_stocks_data
-            SELECT staging.*
-            FROM martin_pm_coderhouse.temp_exchange_stocks_data as staging
-            LEFT JOIN martin_pm_coderhouse.exchange_stocks_data as target
-            ON staging.exchange_symbol = target.exchange_symbol
-            AND staging.event_date = target.event_date
-            WHERE target.exchange_symbol IS NULL;
-        """)
-        with engine.connect() as conn:
-            conn.execute(insert_query)
-        self.__enviar_Alerta("Estado del Proceso ETL: Exito","El job termino con exito")
+        from sqlalchemy import text, types
+        from sqlalchemy.exc import SQLAlchemyError
+        try:
+            pg_hook = PostgresHook(postgres_conn_id='redshift_connection')
+            engine = pg_hook.get_sqlalchemy_engine()
+            temp_table_name = f"{nameTable}"
+            df_exchanges = pd.read_json(dic_exchanges, convert_dates=['Event_Date', 'aud_ins_dttm'])
+            df_exchanges.to_sql(temp_table_name, engine, index=False, if_exists='replace', method='multi', dtype={'aud_ins_dttm': types.DateTime(), 'Event_Date': types.Date()})
+            
+            update_query = text("""
+                UPDATE martin_pm_coderhouse.exchange_stocks_data as target
+                SET
+                    trading_volume = staging.trading_volume,
+                    volume_weighted_average_price = staging.volume_weighted_average_price,
+                    open_price = staging.open_price,
+                    close_price = staging.close_price,
+                    highest_price = staging.highest_price,
+                    lowest_price = staging.lowest_price,
+                    number_of_transactions = staging.number_of_transactions
+                FROM martin_pm_coderhouse.temp_exchange_stocks_data as staging
+                WHERE target.exchange_symbol = staging.exchange_symbol
+                AND target.event_date = staging.event_date;
+            """)
+            
+            insert_query = text("""
+                INSERT INTO martin_pm_coderhouse.exchange_stocks_data
+                SELECT staging.*
+                FROM martin_pm_coderhouse.temp_exchange_stocks_data as staging
+                LEFT JOIN martin_pm_coderhouse.exchange_stocks_data as target
+                ON staging.exchange_symbol = target.exchange_symbol
+                AND staging.event_date = target.event_date
+                WHERE target.exchange_symbol IS NULL;
+            """)
+            
+            with engine.begin() as conn:  # Usar engine.begin() para asegurar que las transacciones sean manejadas correctamente.
+                conn.execute(update_query)
+                conn.execute(insert_query)
+            
+            self.__enviar_Alerta("Estado del Proceso ETL: Exito", "El job termino con exito")
+        
+        except SQLAlchemyError as e:
+            # Manejo de excepciones específicas de SQLAlchemy
+            self.__enviar_Alerta("Error en el Proceso ETL", f"Se encontró un error: {e}")
+        except Exception as e:
+            # Manejo de cualquier otra excepción inesperada
+            self.__enviar_Alerta("Error inesperado en el Proceso ETL", f"Se encontró un error inesperado: {e}")
 
     def alerts_stocks_value(self, dic_exchanges):
         df_validate = pd.read_json(dic_exchanges)
