@@ -12,19 +12,18 @@ from airflow.models import Variable
 import smtplib
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
+import ast
 
 class GestorDeDatos:
     def __init__(self):
         self.__datos = Variable.get("SECRETS_API_KEY")
         self.__config_validate = json.loads(Variable.get("CONFIG_POLYGOL"))
-        print(f'el valor de la variable es: {self.__datos}')
 
     def __enviar_Alerta(self, gp_subject: str, gp_body: str):
         try:
             email_from = os.environ.get('EMAIL_FROM')
             pass_email_from = Variable.get("SECRETS_EMAIL_KEY")
-            email_to = os.environ.get('EMAIL_TO')
-            
+            email_to = ", ".join(ast.literal_eval(Variable.get("SEND_EMAIL_TO")))  # transformo la lista que la obtengo como un string a una lista para luego generar un string separado por , (Lo hice por cuestion que me parece mejor para modificar la variable desde flow)
             # Crear una instancia de MIMEMultipart
             message = MIMEMultipart()
             message['From'] = email_from
@@ -67,11 +66,9 @@ class GestorDeDatos:
         from requests import get,exceptions
         import time
         all_results = []  # Lista para almacenar resultados de todas las ejecuciones
-        print(f'el valor de la variable es: {self.__datos}')
         for ticker in self.__config_validate['stocks']:
             url = f'https://api.polygon.io/v2/aggs/ticker/{ticker}/range/1/{timespan}/{p_from.strftime("%Y-%m-%d")}/{p_to.strftime("%Y-%m-%d")}'
             paramsApi = {"apiKey" : f"{self.__datos}"}
-            print(paramsApi)
             try:
                 response = get(url, params=paramsApi)
                 response.raise_for_status()  # Lanza una excepción para errores HTTP
@@ -202,10 +199,8 @@ class GestorDeDatos:
     def alerts_stocks_value(self, dic_exchanges):
         df_validate = pd.read_json(dic_exchanges)
         filtered_df = pd.DataFrame()  # Crear un nuevo DataFrame vacío para almacenar los resultados
-        print(df_validate[['Exchange_Symbol','Close_Price']])
         for symbol, values in self.__config_validate["thresholds"].items():
             # Filtrar las filas donde el símbolo coincide y el precio está dentro del rango
-            print(symbol,values)
             temp_df = df_validate[(df_validate['Exchange_Symbol'] == symbol) & ((df_validate['Close_Price'] <= values['min']) )]
             if not temp_df.empty:
                 # Aquí determinamos si el precio está por encima o por debajo del rango y creamos la nueva columna 'Status'
@@ -233,12 +228,10 @@ def extract_data(p_from_str, p_to_str):
     p_from = datetime.strptime(p_from_str, '%Y-%m-%d')
     p_to = datetime.strptime(p_to_str, '%Y-%m-%d')
     response_Api = gestor.cryptoapi(p_from=p_from, p_to=p_to)
-    print(response_Api)
     return response_Api
 
 def transform_data(**context):
     response_Api = context['task_instance'].xcom_pull(task_ids='extract_data_task')
-    print(response_Api)
     df_exchanges = gestor.dataframeCrypto(response_Api)
     return df_exchanges
 
@@ -272,7 +265,7 @@ extract_data_task = PythonOperator(
     task_id='extract_data_task',
     python_callable=extract_data,
     op_kwargs={
-        # 'tickers': ["AAPL", "GOOGL", "SP"],
+        # 'tickers': ["AAPL", "GOOGL", "SP"], ## Dejo este comentario porque cambie de donde se obtiene los datos para confirgurarlo desde flow en la variable de config
         'p_from_str': '{{ macros.ds_add(ds, -8) }}',  # Fecha de ejecución + 1 día
         'p_to_str': '{{ ds }}',  # Fecha de ejecución
     },

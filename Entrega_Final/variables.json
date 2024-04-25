@@ -21,5 +21,6 @@
                 "max": 230
             }
         }
-    }
+    },
+    "SEND_EMAIL_TO" : ["tiinchho@gmail.com"]
 }
